@@ -1,0 +1,1 @@
+Requires google's protocol buffers and the goprotobuf bindings be installed before compilation.
