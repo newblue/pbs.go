@@ -6,7 +6,10 @@ import (
 )
 
 func TestPBS(t *testing.T){
-	ds := NewPBS()
+
+	memStore := NewMemoryStore()
+	stores := [1]DataStore { memStore }
+	ds := NewPBSDataStore( &stores )
 
 	test := &Test {
 	Label: proto.String("hello"),

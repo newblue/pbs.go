@@ -9,7 +9,7 @@ import (
 
 type DataStore interface{
 	Put(key string, data []byte) (err os.Error)
-	Get(key string, data []byte) (err os.Error)
+	Get(key string) (data []byte, err os.Error)
 	Delete(key string) (err os.Error)
 }
 
@@ -18,8 +18,6 @@ type PBSStorage interface{
 	Get(key string, value interface{}) (err os.Error)
 	Delete(key string) (err os.Error)
 	Expire(key string) (err os.Error)
-	Next() (ds PBSDataStore)
-	Prev() (ds PBSDataStore)
 }
 
 type MemoryElem struct{
@@ -47,7 +45,7 @@ type NetworkStore struct{
 
 type PBSDataStore struct{
 	keys map[string] *PBSDataStore
-	*DataStore
+	datastore DataStore
 	next *PBSDataStore
 	prev *PBSDataStore
 }
@@ -67,14 +65,14 @@ func DoMarshalling(value interface{}) (key string, data []byte, err os.Error) {
 func NewPBSDataStore(stores []DataStore) *PBSDataStore {
 	ds := new(PBSDataStore)
 	ds.prev = nil
-	ds.DataStore = &stores[0]
+	ds.datastore = stores[0]
 	ds.keys = make(map[string] *PBSDataStore)
 	prev := ds
 	for _, store := range stores[1:] {
 		ns := new(PBSDataStore)
 		prev.next = ns
 		ns.prev = prev
-		ns.DataStore = &store
+		ns.datastore = store
 		prev = ns
 	}
 	return ds
@@ -83,7 +81,7 @@ func NewPBSDataStore(stores []DataStore) *PBSDataStore {
 func (ds *PBSDataStore) Put(value interface{}) (key string, err os.Error) {
 	t_key, data, err := DoMarshalling(value)
 	if err == nil && ds.keys[t_key] == nil {
-		err = ds.DataStore.Put(t_key, data)
+		err = ds.datastore.Put(t_key, data)
 		if err == nil {
 			ds.keys[t_key] = ds
 			key = t_key
@@ -93,6 +91,12 @@ func (ds *PBSDataStore) Put(value interface{}) (key string, err os.Error) {
 }
 
 func (ds *PBSDataStore) Get(key string, value interface{}) (err os.Error) {
+	if ds.keys[key] != nil {
+		data, err := ds.datastore.Get(key)
+		if err == nil {
+			err = proto.Unmarshal(data, value)
+		}
+	}
 	return
 }
 
@@ -143,30 +147,60 @@ func (ds *MemoryStore) Put(key string, data []byte) (err os.Error) {
 	return
 }
 
-func (ds *MemoryStore) Get(key string, value interface{}) (err os.Error) {
+func (ds *MemoryStore) Get(key string) (data []byte, err os.Error) {
 	if ds.kvstore[key] != nil {
 
-		err = proto.Unmarshal(ds.kvstore[key].data, value)
-
-		if err == nil {
-
-			if ds.lruKey == key {
-				ds.lruKey = ds.kvstore[key].nextLRU
-				ds.kvstore[ds.mruKey].nextLRU = key
-				ds.kvstore[key].prevLRU = ds.mruKey
-				ds.mruKey = key
-			} else if ds.mruKey != key {
-				prev := ds.kvstore[key].prevLRU
-				next := ds.kvstore[key].nextLRU
-
-				ds.kvstore[prev].nextLRU = next
-				ds.kvstore[next].prevLRU = prev
-
-				ds.kvstore[ds.mruKey].nextLRU = key
-				ds.kvstore[key].prevLRU = ds.mruKey
-				ds.mruKey = key
-			} // Otherwise key == ds.mruKey, do nothing
+		data = ds.kvstore[key].data
+		
+		if ds.mruKey != "" && ds.mruKey == key {
+			// Pass
 		}
+		if ds.lruKey != "" && ds.lruKey == key {
+			ds.lruKey = ds.kvstore[key].nextLRU
+			ds.kvstore[ds.mruKey].nextLRU = key
+			ds.kvstore[key].prevLRU = ds.mruKey
+			ds.mruKey = key
+		} else if key != "" && ds.mruKey != "" {
+			prev := ds.kvstore[key].prevLRU
+			next := ds.kvstore[key].nextLRU
+			
+			if prev != "" {
+				ds.kvstore[prev].nextLRU = next
+			}
+			if next != "" {
+				ds.kvstore[next].prevLRU = prev
+			}
+			
+			ds.kvstore[ds.mruKey].nextLRU = key
+			ds.kvstore[key].prevLRU = ds.mruKey
+			ds.mruKey = key
+		} else {
+			err = os.NewError("Key is empty")
+		}
+	} else {
+		err = os.NewError("Key not found")
+	}
+	return
+}
+
+func (ds *MemoryStore) Delete(key string) (err os.Error) {
+	if ds.kvstore[key] != nil {
+		if ds.lruKey == key {
+			ds.lruKey = ds.kvstore[key].nextLRU
+			ds.kvstore[ds.lruKey].prevLRU = ""
+		} else if ds.mruKey == key {
+			ds.mruKey = ds.kvstore[key].prevLRU
+			ds.kvstore[ds.mruKey].nextLRU = ""
+		} else {
+			prev := ds.kvstore[key].prevLRU
+			next := ds.kvstore[key].nextLRU
+			
+			ds.kvstore[prev].nextLRU = next
+			ds.kvstore[next].prevLRU = prev
+		}
+		ds.kvstore[key] = nil
+	} else {
+		err = os.NewError("Key not found")
 	}
 	return
 }
